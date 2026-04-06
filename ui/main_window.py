@@ -441,6 +441,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._section_label("NETWORK MODE"))
         self._btn_single = QPushButton("SINGLE PHASE")
         self._btn_three = QPushButton("THREE PHASE")
+        self._btn_three.setEnabled(False)  # Temporarily disabled
         for btn in (self._btn_single, self._btn_three):
             btn.setCheckable(True)
             layout.addWidget(btn)
@@ -541,9 +542,9 @@ class MainWindow(QMainWindow):
         inner.setContentsMargins(0, 0, 0, 0)
         inner.setSpacing(8)
 
-        self._circuit = CircuitPanel()
-        self._circuit.block_selected.connect(self._set_info_topic)
-        inner.addWidget(self._circuit, stretch=0)
+        # self._circuit = CircuitPanel()
+        # self._circuit.block_selected.connect(self._set_info_topic)
+        # inner.addWidget(self._circuit, stretch=0)
 
         self._plot_stack = QStackedWidget()
         self._plot_stack.addWidget(self._build_story_page())
@@ -942,9 +943,9 @@ class MainWindow(QMainWindow):
             widget.set_selected(graph_topic == key)
 
         self._spectrum.set_selected(graph_topic == "graph:spectrum")
-        self._circuit.set_selected_block(
-            self._current_info_topic if self._current_info_topic.startswith("circuit_") else ""
-        )
+        # self._circuit.set_selected_block(
+        #     self._current_info_topic if self._current_info_topic.startswith("circuit_") else ""
+        # )
 
     def _refresh_info(self):
         title, summary_html, detail_html = self._build_info_payload(self._current_info_topic)
