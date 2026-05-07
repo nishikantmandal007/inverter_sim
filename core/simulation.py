@@ -487,7 +487,7 @@ class SimulationEngine:
             return "Tracks overall current error, but it is not frequency-selective, so harmonic cleanup is limited."
         if name == "PR":
             return "Uses resonant action at the fundamental and tuned harmonic frequencies, so targeted harmonic cancellation is stronger."
-        return "Predicts the next current response and chooses the switching state that best reduces future error and residual distortion."
+        return "Predicts the next current response and chooses the switching state that best reduces future error. (Note: The visible 'noise' or ripple in the MPC graph occurs because it switches dynamically to minimize error in real-time, creating high-frequency switching ripple that the filter partially absorbs)."
 
     def _ordinal(self, value: int) -> str:
         if 10 <= value % 100 <= 20:

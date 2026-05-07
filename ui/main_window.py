@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from core.parameters import P
 from core.simulation import SimulationEngine, SimResult
+from ui.settings_dialog import SettingsDialog
 from widgets.circuit_panel import CircuitPanel
 from widgets.metrics import MetricsPanel
 from widgets.oscilloscope import Channel, OscilloscopeWidget
@@ -441,7 +442,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._section_label("NETWORK MODE"))
         self._btn_single = QPushButton("SINGLE PHASE")
         self._btn_three = QPushButton("THREE PHASE")
-        self._btn_three.setEnabled(False)  # Temporarily disabled
         for btn in (self._btn_single, self._btn_three):
             btn.setCheckable(True)
             layout.addWidget(btn)
@@ -511,6 +511,11 @@ class MainWindow(QMainWindow):
         btn_sag.clicked.connect(self._inject_sag)
         layout.addWidget(btn_sag)
 
+        btn_config = QPushButton("⚙ CONFIGURE PARAMETERS")
+        btn_config.setStyleSheet("background-color: #2036c7; color: white;")
+        btn_config.clicked.connect(self._open_settings)
+        layout.addWidget(btn_config)
+
         layout.addSpacing(4)
         layout.addWidget(self._section_label("DISPLAY PHASE"))
 
@@ -542,9 +547,9 @@ class MainWindow(QMainWindow):
         inner.setContentsMargins(0, 0, 0, 0)
         inner.setSpacing(8)
 
-        # self._circuit = CircuitPanel()
-        # self._circuit.block_selected.connect(self._set_info_topic)
-        # inner.addWidget(self._circuit, stretch=0)
+        self._circuit = CircuitPanel()
+        self._circuit.block_selected.connect(self._set_info_topic)
+        inner.addWidget(self._circuit, stretch=0)
 
         self._plot_stack = QStackedWidget()
         self._plot_stack.addWidget(self._build_story_page())
@@ -594,8 +599,19 @@ class MainWindow(QMainWindow):
         self._scope_after_story.add_channel(Channel("I_grid", "Cleaned Grid Current", "A", 1.0))
         self._scope_after_story.add_channel(Channel("I_ref", "Active Current Target", "A", 1.0))
         self._scope_after_story.panel_selected.connect(self._set_info_topic)
-        self._scope_after_story.setMinimumHeight(270)
+        self._scope_after_story.setMinimumHeight(240)
         layout.addWidget(self._scope_after_story, stretch=1)
+
+        self._scope_error_story = OscilloscopeWidget(
+            title="TRACKING ERROR | ACTUAL DEVIATION FROM TARGET",
+            subtitle="The literal discrepancy between the ideal target and the cleaned grid current (I_ref - I_grid).",
+            caption="Purple = Instantaneous Tracking Error. A flat line at zero means mathematically perfect control.",
+            info_key="graph:error",
+        )
+        self._scope_error_story.add_channel(Channel("I_error", "Tracking Error", "A", 1.0, color="#7a42b8"))
+        self._scope_error_story.panel_selected.connect(self._set_info_topic)
+        self._scope_error_story.setMinimumHeight(200)
+        layout.addWidget(self._scope_error_story, stretch=1)
 
         return page
 
@@ -753,6 +769,7 @@ class MainWindow(QMainWindow):
 
         self._scope_before_story.set_title(f"{prefix} | BEFORE | VOLTAGE + DISTORTED CURRENT")
         self._scope_after_story.set_title(f"{prefix} | AFTER | CLEANED SOURCE CURRENT")
+        self._scope_error_story.set_title(f"{prefix} | TRACKING ERROR (TARGET - ACTUAL)")
         self._scope_raw_step.set_title(f"{prefix} | STEP 1 | RAW WAVEFORM")
         self._scope_comp_step.set_title(f"{prefix} | STEP 2 | INVERTER COMPENSATION")
         self._scope_clean_step.set_title(f"{prefix} | STEP 3 | CLEANED SOURCE CURRENT")
@@ -769,6 +786,7 @@ class MainWindow(QMainWindow):
         zeros = np.zeros(SimulationEngine.SAMPLES_PER_CYCLE)
         self._scope_before_story.update_all({"Vg": zeros, "I_load": zeros})
         self._scope_after_story.update_all({"Vg": zeros, "I_grid": zeros, "I_ref": zeros})
+        self._scope_error_story.update_all({"I_error": zeros})
         self._scope_raw_step.update_all({"Vg": zeros, "I_load": zeros})
         self._scope_comp_step.update_all({"I_comp": zeros, "I_harm": zeros, "I_react": zeros})
         self._scope_clean_step.update_all({"Vg": zeros, "I_grid": zeros, "I_ref": zeros})
@@ -822,8 +840,22 @@ class MainWindow(QMainWindow):
         self._clear_plots()
         self._set_info_topic("overview")
 
+    def _open_settings(self):
+        was_running = self._running
+        if was_running:
+            self._toggle_run(False)
+            
+        dialog = SettingsDialog(self)
+        if dialog.exec():
+            self._rebuild_engine()
+            
+        if was_running:
+            self._btn_run.setChecked(True)
+            self._toggle_run(True)
+
     def _inject_sag(self):
-        self._engine.trigger_voltage_sag(depth=0.20, duration_cycles=3)
+        # 30% drop for 20 cycles gives enough time to clearly see the visual drop and recovery
+        self._engine.trigger_voltage_sag(depth=0.30, duration_cycles=20)
         self._info_event.set_value("SAG", "#bf2026")
         self._metrics.set_event_state(True)
         self._refresh_info()
@@ -863,6 +895,9 @@ class MainWindow(QMainWindow):
             "I_grid": free_run(phase_grid),
             "I_ref": free_run(phase_ref),
         })
+        self._scope_error_story.update_all({
+            "I_error": free_run(phase_ref - phase_grid)
+        })
         self._scope_raw_step.update_all({
             "Vg": scaled_v,
             "I_load": free_run(phase_load),
@@ -877,6 +912,14 @@ class MainWindow(QMainWindow):
             "I_grid": free_run(phase_grid),
             "I_ref": free_run(phase_ref),
         })
+
+        alert = self._engine.sag_active
+        self._scope_before_story.set_alert(alert)
+        self._scope_after_story.set_alert(alert)
+        self._scope_error_story.set_alert(alert)
+        self._scope_raw_step.set_alert(alert)
+        self._scope_comp_step.set_alert(alert)
+        self._scope_clean_step.set_alert(alert)
 
         self._spectrum.update_spectrum(
             result.freqs,
@@ -936,6 +979,7 @@ class MainWindow(QMainWindow):
         for widget, key in (
             (self._scope_before_story, "graph:before"),
             (self._scope_after_story, "graph:after"),
+            (self._scope_error_story, "graph:error"),
             (self._scope_raw_step, "graph:before"),
             (self._scope_comp_step, "graph:compensation"),
             (self._scope_clean_step, "graph:after"),
@@ -943,9 +987,9 @@ class MainWindow(QMainWindow):
             widget.set_selected(graph_topic == key)
 
         self._spectrum.set_selected(graph_topic == "graph:spectrum")
-        # self._circuit.set_selected_block(
-        #     self._current_info_topic if self._current_info_topic.startswith("circuit_") else ""
-        # )
+        self._circuit.set_selected_block(
+            self._current_info_topic if self._current_info_topic.startswith("circuit_") else ""
+        )
 
     def _refresh_info(self):
         title, summary_html, detail_html = self._build_info_payload(self._current_info_topic)
@@ -978,12 +1022,13 @@ class MainWindow(QMainWindow):
             return self._compose_payload(
                 "SYSTEM OVERVIEW",
                 [
-                    ("What It Is", f"Phase {phase_label} shows the full story: red is the distorted current before compensation, orange is what the inverter injects, and green is the cleaned current that remains on the source side."),
+                    ("What It Is", f"Phase {phase_label} shows the full story: <b><font color='#bf2026'>Red</font></b> is the distorted load current, <b><font color='#c97d00'>Orange</font></b> is the inverter's injected correction, and <b><font color='#0f6f25'>Green</font></b> is the final cleaned grid current."),
                     ("Current Value", f"THD moves from <b>{result.THD_before:.2f}%</b> to <b>{result.THD_after:.2f}%</b>. PF moves from <b>{result.PF_before:.4f}</b> to <b>{result.PF_after:.4f}</b>. Reactive compensation reaches <b>{result.reactive_comp_ratio * 100.0:.1f}%</b> of the unwanted reactive burden."),
                     ("Target / Better Direction", "Make the source current look as close as possible to the dashed active-current target while reducing harmonic bars and improving power factor."),
                     ("Why Improving This Helps", "Lower THD means cleaner current and lower heating. Higher PF means less non-working current. Lower reactive power means the source carries more useful power and less unwanted burden."),
                     ("How PI / PR / MPC Affect It", result.controller_truth.get(result.ctrl_name, {}).get("method", "")),
                     ("How the Circuit Contributes", "The nonlinear load creates distortion. Sensors measure it. The controller computes cancelling current. The VSI generates it. The LCL filter smooths it before the PCC sends cleaner current back to the grid."),
+                    ("Grid Event Response", "During a sag, the controller detects the low voltage and immediately calculates a reactive current support command, forcing the inverter to inject leading reactive power to prop up the PCC voltage."),
                 ],
                 [
                     ("Controller comparison", cards),
@@ -996,7 +1041,7 @@ class MainWindow(QMainWindow):
             return self._compose_payload(
                 "BEFORE | The Problem",
                 [
-                    ("What It Is", f"This graph shows the raw electrical condition at phase {phase_label} before compensation. The blue trace is the supply reference. The red trace is the distorted current drawn by the nonlinear load."),
+                    ("What It Is", f"This graph shows the raw electrical condition at phase {phase_label} before compensation. The <b><font color='#102d8f'>Blue trace</font></b> is the ideal supply voltage reference. The <b><font color='#bf2026'>Red trace</font></b> is the dirty, distorted current drawn by the load."),
                     ("Current Value", f"Before compensation the current THD is <b>{result.THD_before:.2f}%</b> and PF is <b>{result.PF_before:.4f}</b>. Dominant unwanted content is currently <b>{html.escape(result.dominant_harmonic)}</b>."),
                     ("Target / Better Direction", "The source current should become smoother, closer to a sine wave, and closer to the active current target instead of carrying reactive and harmonic content."),
                     ("Why Improving This Helps", "If this raw current is left untouched, the source supplies harmonic pollution and reactive burden. That means poorer power quality and more useless current flow."),
@@ -1012,7 +1057,7 @@ class MainWindow(QMainWindow):
             return self._compose_payload(
                 "AFTER GRAPH | CLEANED SOURCE CURRENT",
                 [
-                    ("What It Is", f"This graph shows what remains on the source side after the selected controller and inverter inject the correction current. The green trace is the cleaned grid current and the dashed gray trace is the active-current target."),
+                    ("What It Is", f"This graph shows what remains on the source side. The <b><font color='#0f6f25'>Green trace</font></b> is the cleaned grid current and the <b><font color='#444444'>Dashed Gray trace</font></b> is the ideal target sine wave."),
                     ("Current Value", f"After compensation, THD is <b>{result.THD_after:.2f}%</b>, PF is <b>{result.PF_after:.4f}</b>, reactive power drops to <b>{result.Q_out:.1f} var</b>, and the compensation current RMS is <b>{result.comp_rms:.2f} A</b>."),
                     ("Target / Better Direction", "The green current should align more closely with the dashed target and keep harmonic bars small, ideally below IEEE 519 limits."),
                     ("Why Improving This Helps", "This is the proof that the circuit is doing something different: the grid no longer carries the full harmonic/reactive burden of the load."),
@@ -1024,11 +1069,27 @@ class MainWindow(QMainWindow):
                 ],
             )
 
+        if topic == "graph:error":
+            return self._compose_payload(
+                "ERROR GRAPH | TRACKING PERFORMANCE",
+                [
+                    ("What It Is", "This graph mathematically subtracts the actual grid current from the target reference to show you the instantaneous tracking error."),
+                    ("Current Value", f"The peak error is roughly <b>{np.max(np.abs(result.I_ref[phase_idx] - result.I_grid[phase_idx])):.2f} A</b>. The RMS compensation injected was <b>{result.comp_rms:.2f} A</b>."),
+                    ("Target / Better Direction", "A perfectly flat purple line exactly at zero means the controller achieved 100% ideal waveform tracking."),
+                    ("Why Improving This Helps", "The tighter the error bounds, the lower your THD% will be. It directly measures controller capability."),
+                    ("How PI / PR / MPC Affect It", "PI will show a steady sinusoidal error (unable to track AC well). PR will crush error at resonance frequencies. MPC will show high-frequency noise but tightly bound the overall error near zero."),
+                    ("How the Circuit Contributes", "The controller commands correction, but physical limitations like switching speed and filter inductor size determine how fast the error can be driven to zero."),
+                ],
+                [
+                    ("Engineering Detail", f"Error amplitude dynamically demonstrates the phase delay and attenuation of the closed-loop system."),
+                ],
+            )
+
         if topic == "graph:compensation":
             return self._compose_payload(
                 "COMPENSATION GRAPH | WHAT THE CIRCUIT INJECTS",
                 [
-                    ("What It Is", "This graph isolates the current produced by the inverter. Orange is the total injected current. Purple represents harmonic cancellation demand. Cyan represents reactive compensation demand."),
+                    ("What It Is", "This graph isolates the inverter's action. <b><font color='#c97d00'>Orange</font></b> is the total injected current. <b><font color='#7a42b8'>Purple</font></b> is the harmonic cancellation part. <b><font color='#1a7da8'>Cyan</font></b> is the reactive compensation part."),
                     ("Current Value", f"The inverter is currently injecting <b>{result.comp_rms:.2f} A RMS</b>. Reactive burden reduction is <b>{result.reactive_comp_ratio * 100.0:.1f}%</b> and the dominant harmonic being reduced is <b>{html.escape(result.dominant_harmonic)}</b>."),
                     ("Target / Better Direction", "Inject only the unwanted part of the current so the grid side is left with mostly active fundamental current."),
                     ("Why Improving This Helps", "This is the exact mechanism of harmonic reduction: the inverter creates a cancelling current that opposes the unwanted harmonic and reactive parts of the load current."),

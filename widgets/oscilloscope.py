@@ -148,6 +148,19 @@ class OscilloscopeWidget(QWidget):
         self._is_selected = selected
         self._apply_panel_state()
 
+    def set_alert(self, is_alert: bool):
+        if is_alert:
+            self._axis.set_facecolor('#fff0eb')
+            for spine in self._axis.spines.values():
+                spine.set_color('#bf2026')
+                spine.set_linewidth(2.0)
+        else:
+            self._axis.set_facecolor(AX_BG)
+            for spine in self._axis.spines.values():
+                spine.set_color(BORDER)
+                spine.set_linewidth(1.0)
+        self._canvas.draw_idle()
+
     def add_channel(self, ch: Channel):
         (line,) = self._axis.plot(
             [],
@@ -233,7 +246,13 @@ class OscilloscopeWidget(QWidget):
                 ch.line.set_visible(False)
 
         peak = max(float(np.max(np.abs(y))) for y in y_limits) if y_limits else 1.0
-        peak = max(peak, 1e-3)
+        
+        # If this plot contains grid voltage, enforce a minimum peak so sags are visible
+        # (Since Vg peak is scaled to ~10.0 normally, setting min peak to 11.0 prevents the Y-axis from shrinking during a sag)
+        if any(ch.key == "Vg" for ch in self.channels if ch.visible):
+            peak = max(peak, 11.0)
+        else:
+            peak = max(peak, 1e-3)
 
         self._axis.set_xlim(float(x_ms[0]), float(x_ms[-1]))
         self._axis.set_ylim(-1.15 * peak, 1.15 * peak)
